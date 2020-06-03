@@ -36,7 +36,7 @@ $api_version = "4.1"
 $credentials_file = "tfs_credentials.txt"
 
 if(![System.IO.File]::Exists("$HOME\$credentials_file")){
-   $cred = Get-Credential -Message "Enter your username (with domain) and password.`r`nExample User: domain\user"
+   $cred = Get-Credential -Message "Enter your username (with domain) and password. The password will be stored on your home folder using SecureString (DPAPI), remember to delete that file everytime you change your password.`r`n`r`nExample User: domain\user"
    if(!$cred)
    {
      Exit
