@@ -1,8 +1,8 @@
 <#
-  v1.0
+  v1.1
 
   USAGE:
-  - Open this script on PowerShell ISE;
+  - Open this script on PowerShell ISE or import into the current Powershell session (eg. ". .\TFS_TASKS.ps1");
   - Remember to allow the execution of scripts in PowerShell before trying to run it. Eg. 'Set-ExecutionPolicy Unrestricted -Scope CurrentUser'
   - Configure your TFS base URL, it may need your collection and project ids/paths.
   - Use the commands bellow;
@@ -25,7 +25,27 @@
   #Create task function
   #Params in order (space-separated) - parentId (long), title (string), activity (string), remaining hours (long), description (string)
   createTask 1234 "A&D" "Development" 1 ""
+  
+  ########################
+  #Example WorkLog       #
+  ########################
 
+  #Params in order (space-separated) - issueId (long), additionalWorkHours (float), user (string), date (string), comment (string)
+  incrementWorklog 1234 0.5 "Some user" "2020-05-03" "Doing some work"
+
+  ########################################
+  #Import WorkLog from TMetrics CSV      #
+  ########################################
+
+  #Params in order (space-separated) - csv file path (string)
+  importWorklogFromTMetricsCSV ".\file.csv"
+  
+  #Expected columns:
+     Issue Id -> id (with starting # or not)
+     Time -> Amound of time in format HH:mm:ss
+     User -> identifier
+     Day -> Date of that worklog
+     Time Entry -> Any comment about the work being done.
 #>
 
 #TFS Enviroment
@@ -85,13 +105,13 @@ function callTFS()
    $request = [System.Net.HttpWebRequest]::Create($URI)
    $request.Credentials = $Creds
    $request.Headers.Add("cache-control","no-cache")
-   $request.ContentType = "application/json-patch+json"
+   $request.ContentType = "application/json-patch+json; charset=utf-8"
    $request.Accept = "application/json"
    $request.Method = $method
 
    if($body)
    {
-      $requestBody = [byte[]][char[]]$body
+      $requestBody = [System.Text.Encoding]::UTF8.GetBytes($body);
       $request.ContentLength = $requestBody.Length 
       
       $stream = $request.GetRequestStream()
@@ -199,4 +219,85 @@ function createTask()
       ]'
 
       return (callTFS "POST" "workitems/`$Task" $body | ConvertFrom-Json).id
+}
+
+function incrementWorklog()
+{
+   Param
+   (
+         [Parameter(Mandatory=$true, Position=0)]
+         [long]$issueId,
+         [Parameter(Mandatory=$true, Position=1)]
+         [ValidateRange(0.25,100)]
+         [double]$additionalWorklog,
+         [Parameter(Mandatory=$false, Position=2)]
+         [string]$user,
+         [Parameter(Mandatory=$false, Position=3)]
+         [string]$date,
+         [Parameter(Mandatory=$false, Position=4)]
+         [string]$comment
+   )
+
+   #Worklog
+   $currentWorklog = (callTFS "GET" "workitems/$issueId" | ConvertFrom-Json).fields.'Microsoft.VSTS.Scheduling.CompletedWork'
+   $newWorklog = $currentWorklog + $additionalWorklog
+
+   #Comment
+   $note = "Updating Complete Work from: $currentWorklog to: $newWorklog."
+   
+   if($comment)
+   { 
+     $note = $note + " - Comment: " + $comment 
+   }
+   
+   if($date)
+   { 
+     $note = $note + " - on: " + $date 
+   }
+
+   if($user)
+   {
+     $note = $note + " - by " + $user
+   }
+
+   $body =
+   '[
+       {
+          "op": "replace",
+          "path": "/fields/Microsoft.VSTS.Scheduling.CompletedWork",
+          "value": ' + $newWorklog + '
+       },
+       {
+          "op": "add",
+          "path": "/fields/System.History",
+          "value": ' + (ConvertTo-Json($note)) + '
+       }
+    ]'
+
+   (callTFS "PATCH" "workitems/$issueId" $body | ConvertFrom-Json).fields.'Microsoft.VSTS.Scheduling.CompletedWork'
+}
+
+function importWorklogFromTMetricsCSV()
+{
+   Param
+   (
+         [Parameter(Mandatory=$true, Position=0)]
+         [string]$filePath
+   )
+
+   $csv = Import-Csv $filePath
+
+   Foreach ($i in $csv)
+   {
+     if($i.'Issue Id' -ne "")
+     {
+
+        $id = $i.'Issue Id'.replace("#","")
+        $time = $i.'Time'.split(":");
+        $time = [int]$time[0] + ([float]$time[1]/60)
+
+        incrementWorklog $id $time $i.'User' $i.'Day' $i.'Time Entry'
+     }
+   }
+
 }
